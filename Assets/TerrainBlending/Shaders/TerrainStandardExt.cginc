@@ -196,73 +196,31 @@ inline half TerrainAlpha()
 
 float3 TerrainPerPixelWorldNormal(half3 mixedNormal, float4 tangentToWorld[3])
 {
-#ifdef _NORMALMAP
-    half3 tangent = tangentToWorld[0].xyz;
-    half3 binormal = tangentToWorld[1].xyz;
-    half3 normal = tangentToWorld[2].xyz;
+    #ifdef _NORMALMAP
+        half3 tangent = tangentToWorld[0].xyz;
+        half3 binormal = tangentToWorld[1].xyz;
+        half3 normal = tangentToWorld[2].xyz;
 
-    #if UNITY_TANGENT_ORTHONORMALIZE
-        normal = NormalizePerPixelNormal(normal);
-
-        // ortho-normalize Tangent
-        tangent = normalize (tangent - normal * dot(tangent, normal));
-
-        // recalculate Binormal
-        half3 newB = cross(normal, tangent);
-        binormal = newB * sign (dot (newB, binormal));
-    #endif
-
-    half3 normalTangent = mixedNormal;
-    float3 normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well
-#else
-    float3 normalWorld = normalize(tangentToWorld[2].xyz);
-#endif
-    return normalWorld;
-}
-
-inline half3 TerrainPreMultiplyAlpha(half3 diffColor, half alpha, half oneMinusReflectivity, out half outModifiedAlpha)
-{
-    #if defined(_ALPHAPREMULTIPLY_ON)
-        // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
-
-        // Transparency 'removes' from Diffuse component
-        diffColor *= alpha;
-
-        #if (SHADER_TARGET < 30)
-            // SM2.0: instruction count limitation
-            // Instead will sacrifice part of physically based transparency where amount Reflectivity is affecting Transparency
-            // SM2.0: uses unmodified alpha
-            outModifiedAlpha = alpha;
-        #else
-            // Reflectivity 'removes' from the rest of components, including Transparency
-            // outAlpha = 1-(1-alpha)*(1-reflectivity) = 1-(oneMinusReflectivity - alpha*oneMinusReflectivity) =
-            //          = 1-oneMinusReflectivity + alpha*oneMinusReflectivity
-            outModifiedAlpha = 1-oneMinusReflectivity + alpha*oneMinusReflectivity;
+        #if UNITY_TANGENT_ORTHONORMALIZE
+            normal = NormalizePerPixelNormal(normal);
+            // ortho-normalize Tangent
+            tangent = normalize (tangent - normal * dot(tangent, normal));
+            // recalculate Binormal
+            half3 newB = cross(normal, tangent);
+            binormal = newB * sign (dot (newB, binormal));
         #endif
+
+        half3 normalTangent = mixedNormal;
+        float3 normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well
     #else
-        outModifiedAlpha = alpha;
+        float3 normalWorld = normalize(tangentToWorld[2].xyz);
     #endif
-    return diffColor;
+    return normalWorld;
 }
 
 inline half2 TerrainMetallicRough(half4 mixedDiffuse, half mixedMetallic, half mixedSmoothness)
 {
-    //return half2( _Metallic, 1.0f - mixedDiffuse.a );
     return half2( _Metallic, mixedDiffuse.a );
-/*
-    half2 mg;
-#ifdef _METALLICGLOSSMAP
-    mg.r = tex2D(_MetallicGlossMap, uv).r;
-#else
-    mg.r = _Metallic;
-#endif
-
-#ifdef _SPECGLOSSMAP
-    mg.g = 1.0f - tex2D(_SpecGlossMap, uv).r;
-#else
-    mg.g = 1.0f - _Glossiness;
-#endif
-    return mg;*/
 }
 
 inline half3 TerrainDiffuseAndSpecularFromMetallic (half3 albedo, half metallic, out half3 specColor, out half oneMinusReflectivity)
@@ -299,17 +257,12 @@ inline FragmentCommonData TerrainRoughnessSetup(half4 mixedDiffuse, half mixedMe
 inline FragmentCommonData TerrainFragmentSetup(half4 mixedDiffuse, half3 mixedNormal, half mixedMetallic, half mixedSmoothness, float3 i_eyeVec, half3 i_viewDirForParallax, float4 tangentToWorld[3], float3 i_posWorld)
 {
     half alpha = TerrainAlpha();
-    #if defined(_ALPHATEST_ON)
-        clip (alpha - _Cutoff);
-    #endif
 
     FragmentCommonData o = TerrainRoughnessSetup( mixedDiffuse, mixedMetallic, mixedSmoothness );
     o.normalWorld = TerrainPerPixelWorldNormal( mixedNormal, tangentToWorld );
     o.eyeVec = normalize( i_eyeVec );
     o.posWorld = i_posWorld;
-
-    // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
-    o.diffColor = TerrainPreMultiplyAlpha( o.diffColor, alpha, o.oneMinusReflectivity, /*out*/ o.alpha );
+    
     return o;
 }
 
@@ -377,31 +330,7 @@ half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
     
     // lighting
     
-    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, mixedSmoothness, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );
-    
-    /*
-    FRAGMENT_SETUP(s)
-    s.diffColor = mixedDiffuse.rgb;
-    s.oneMinusReflectivity = 1 - mixedDiffuse.a;
-    s.smoothness = mixedSmoothness;           
-    #ifdef _NORMALMAP
-        half3 tangent = i.tangentToWorldAndPackedData[0].xyz;
-        half3 binormal = i.tangentToWorldAndPackedData[1].xyz;
-        half3 normal = i.tangentToWorldAndPackedData[2].xyz;
-        #if UNITY_TANGENT_ORTHONORMALIZE
-            normal = NormalizePerPixelNormal(normal);
-            // ortho-normalize Tangent
-            tangent = normalize (tangent - normal * dot(tangent, normal));
-            // recalculate Binormal
-            half3 newB = cross(normal, tangent);
-            binormal = newB * sign (dot (newB, binormal));
-        #endif
-        half3 normalTangent = mixedNormal;
-        s.normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well        
-    #else
-        s.normalWorld = normalize(i.tangentToWorldAndPackedData[2].xyz);
-    #endif    
-    */                                          
+    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, mixedSmoothness, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );                                         
 
     UNITY_SETUP_INSTANCE_ID(i);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
@@ -477,7 +406,65 @@ half4 fragTerrainAdd (VertexOutputForwardAdd i) : SV_Target
 
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
 
-    FRAGMENT_SETUP_FWDADD(s)
+    //FRAGMENT_SETUP_FWDADD(s)
+    
+    // adjust splatUVs so the edges of the terrain tile lie on pixel centers
+    float2 splatUV = (i.tex.xy * (_Control_TexelSize.zw - 1.0f) + 0.5f) * _Control_TexelSize.xy;
+    half4 splat_control = tex2D(_Control, splatUV);
+    half weight = dot( splat_control, half4(1,1,1,1) );
+    
+    #if !defined(SHADER_API_MOBILE) && defined(TERRAIN_SPLAT_ADDPASS)
+        clip(weight == 0.0f ? -1 : 1);
+    #endif
+    
+    // Normalize weights before lighting and restore weights in final modifier functions so that the overal
+    // lighting result can be correctly weighted.
+    splat_control /= (weight + 1e-3f);
+    
+    float2 uvSplat0 = TRANSFORM_TEX(i.tex.xy, _Splat0);
+    float2 uvSplat1 = TRANSFORM_TEX(i.tex.xy, _Splat1);
+    float2 uvSplat2 = TRANSFORM_TEX(i.tex.xy, _Splat2);
+    float2 uvSplat3 = TRANSFORM_TEX(i.tex.xy, _Splat3);
+    
+    half4 defaultSmoothness = half4( _Smoothness0, _Smoothness1, _Smoothness2, _Smoothness3 );
+    
+    half4 mixedDiffuse = 0.0f;
+    mixedDiffuse += splat_control.r * tex2D(_Splat0, uvSplat0) * half4(1.0, 1.0, 1.0, defaultSmoothness.r);
+    mixedDiffuse += splat_control.g * tex2D(_Splat1, uvSplat1) * half4(1.0, 1.0, 1.0, defaultSmoothness.g);
+    mixedDiffuse += splat_control.b * tex2D(_Splat2, uvSplat2) * half4(1.0, 1.0, 1.0, defaultSmoothness.b);
+    mixedDiffuse += splat_control.a * tex2D(_Splat3, uvSplat3) * half4(1.0, 1.0, 1.0, defaultSmoothness.a);
+        
+    half3 mixedNormal = 0.0f;
+    #ifdef _NORMALMAP        
+        mixedNormal  = UnpackNormalWithScale(tex2D(_Normal0, uvSplat0), _NormalScale0) * splat_control.r;
+        mixedNormal += UnpackNormalWithScale(tex2D(_Normal1, uvSplat1), _NormalScale1) * splat_control.g;
+        mixedNormal += UnpackNormalWithScale(tex2D(_Normal2, uvSplat2), _NormalScale2) * splat_control.b;
+        mixedNormal += UnpackNormalWithScale(tex2D(_Normal3, uvSplat3), _NormalScale3) * splat_control.a;
+        mixedNormal.z += 1e-5f; // to avoid nan after normalizing
+    #endif 
+    
+    #if defined(INSTANCING_ON) && defined(SHADER_TARGET_SURFACE_ANALYSIS) && defined(TERRAIN_INSTANCED_PERPIXEL_NORMAL)
+        mixedNormal = float3(0, 0, 1); // make sure that surface shader compiler realizes we write to normal, as UNITY_INSTANCING_ENABLED is not defined for SHADER_TARGET_SURFACE_ANALYSIS.
+    #endif
+    
+    #if defined(UNITY_INSTANCING_ENABLED) && !defined(SHADER_API_D3D11_9X) && defined(TERRAIN_INSTANCED_PERPIXEL_NORMAL)
+        float3 geomNormal = normalize(tex2D(_TerrainNormalmapTexture, i.tc.zw).xyz * 2 - 1);
+        #ifdef _NORMALMAP
+            float3 geomTangent = normalize(cross(geomNormal, float3(0, 0, 1)));
+            float3 geomBitangent = normalize(cross(geomTangent, geomNormal));
+            mixedNormal = mixedNormal.x * geomTangent
+                          + mixedNormal.y * geomBitangent
+                          + mixedNormal.z * geomNormal;
+        #else
+            mixedNormal = geomNormal;
+        #endif
+        mixedNormal = mixedNormal.xzy;        
+    #endif
+    
+    half mixedMetallic = dot( splat_control, half4(_Metallic0, _Metallic1, _Metallic2, _Metallic3) );
+    half mixedSmoothness = dot( splat_control, half4(_Smoothness0, _Smoothness1, _Smoothness2, _Smoothness3) );
+    
+    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, mixedSmoothness, i.eyeVec, IN_VIEWDIR4PARALLAX_FWDADD(i), i.tangentToWorldAndLightDir, IN_WORLDPOS_FWDADD(i));
 
     UNITY_LIGHT_ATTENUATION(atten, i, s.posWorld)
     UnityLight light = AdditiveLight (IN_LIGHTDIR_FWDADD(i), atten);

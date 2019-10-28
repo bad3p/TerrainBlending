@@ -189,6 +189,130 @@ VertexOutputForwardBase vertTerrainBase (VertexInput v)
     return o;
 }
 
+inline half TerrainAlpha()
+{
+    return _Color.a;
+}
+
+float3 TerrainPerPixelWorldNormal(half3 mixedNormal, float4 tangentToWorld[3])
+{
+#ifdef _NORMALMAP
+    half3 tangent = tangentToWorld[0].xyz;
+    half3 binormal = tangentToWorld[1].xyz;
+    half3 normal = tangentToWorld[2].xyz;
+
+    #if UNITY_TANGENT_ORTHONORMALIZE
+        normal = NormalizePerPixelNormal(normal);
+
+        // ortho-normalize Tangent
+        tangent = normalize (tangent - normal * dot(tangent, normal));
+
+        // recalculate Binormal
+        half3 newB = cross(normal, tangent);
+        binormal = newB * sign (dot (newB, binormal));
+    #endif
+
+    half3 normalTangent = mixedNormal;
+    float3 normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well
+#else
+    float3 normalWorld = normalize(tangentToWorld[2].xyz);
+#endif
+    return normalWorld;
+}
+
+inline half3 TerrainPreMultiplyAlpha(half3 diffColor, half alpha, half oneMinusReflectivity, out half outModifiedAlpha)
+{
+    #if defined(_ALPHAPREMULTIPLY_ON)
+        // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
+
+        // Transparency 'removes' from Diffuse component
+        diffColor *= alpha;
+
+        #if (SHADER_TARGET < 30)
+            // SM2.0: instruction count limitation
+            // Instead will sacrifice part of physically based transparency where amount Reflectivity is affecting Transparency
+            // SM2.0: uses unmodified alpha
+            outModifiedAlpha = alpha;
+        #else
+            // Reflectivity 'removes' from the rest of components, including Transparency
+            // outAlpha = 1-(1-alpha)*(1-reflectivity) = 1-(oneMinusReflectivity - alpha*oneMinusReflectivity) =
+            //          = 1-oneMinusReflectivity + alpha*oneMinusReflectivity
+            outModifiedAlpha = 1-oneMinusReflectivity + alpha*oneMinusReflectivity;
+        #endif
+    #else
+        outModifiedAlpha = alpha;
+    #endif
+    return diffColor;
+}
+
+inline half2 TerrainMetallicRough(half4 mixedDiffuse, half mixedMetallic, half mixedSmoothness)
+{
+    //return half2( _Metallic, 1.0f - mixedDiffuse.a );
+    return half2( _Metallic, mixedDiffuse.a );
+/*
+    half2 mg;
+#ifdef _METALLICGLOSSMAP
+    mg.r = tex2D(_MetallicGlossMap, uv).r;
+#else
+    mg.r = _Metallic;
+#endif
+
+#ifdef _SPECGLOSSMAP
+    mg.g = 1.0f - tex2D(_SpecGlossMap, uv).r;
+#else
+    mg.g = 1.0f - _Glossiness;
+#endif
+    return mg;*/
+}
+
+inline half3 TerrainDiffuseAndSpecularFromMetallic (half3 albedo, half metallic, out half3 specColor, out half oneMinusReflectivity)
+{
+    specColor = lerp (unity_ColorSpaceDielectricSpec.rgb, albedo, metallic);
+    oneMinusReflectivity = OneMinusReflectivityFromMetallic(metallic);
+    return albedo * oneMinusReflectivity;
+}
+
+half3 TerrainAlbedo(float4 mixedDiffuse)
+{
+    half3 albedo = _Color.rgb * mixedDiffuse.rgb;
+    return albedo;
+}
+
+inline FragmentCommonData TerrainRoughnessSetup(half4 mixedDiffuse, half mixedMetallic, half mixedSmoothness)
+{
+    half2 metallicGloss = TerrainMetallicRough(mixedDiffuse, mixedMetallic, mixedSmoothness);
+    half metallic = metallicGloss.x;
+    half smoothness = metallicGloss.y; // this is 1 minus the square root of real roughness m.    
+
+    half oneMinusReflectivity;
+    half3 specColor;
+    half3 diffColor = TerrainDiffuseAndSpecularFromMetallic (TerrainAlbedo(mixedDiffuse), mixedMetallic, /*out*/ specColor, /*out*/ oneMinusReflectivity);
+
+    FragmentCommonData o = (FragmentCommonData)0;
+    o.diffColor = diffColor;
+    o.specColor = specColor;
+    o.oneMinusReflectivity = oneMinusReflectivity;
+    o.smoothness = smoothness;
+    return o;
+}
+
+inline FragmentCommonData TerrainFragmentSetup(half4 mixedDiffuse, half3 mixedNormal, half mixedMetallic, half mixedSmoothness, float3 i_eyeVec, half3 i_viewDirForParallax, float4 tangentToWorld[3], float3 i_posWorld)
+{
+    half alpha = TerrainAlpha();
+    #if defined(_ALPHATEST_ON)
+        clip (alpha - _Cutoff);
+    #endif
+
+    FragmentCommonData o = TerrainRoughnessSetup( mixedDiffuse, mixedMetallic, mixedSmoothness );
+    o.normalWorld = TerrainPerPixelWorldNormal( mixedNormal, tangentToWorld );
+    o.eyeVec = normalize( i_eyeVec );
+    o.posWorld = i_posWorld;
+
+    // NOTE: shader relies on pre-multiply alpha-blend (_SrcBlend = One, _DstBlend = OneMinusSrcAlpha)
+    o.diffColor = TerrainPreMultiplyAlpha( o.diffColor, alpha, o.oneMinusReflectivity, /*out*/ o.alpha );
+    return o;
+}
+
 half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
 {
     UNITY_APPLY_DITHER_CROSSFADE(i.pos.xy);
@@ -252,7 +376,10 @@ half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
     half mixedSmoothness = dot( splat_control, half4(_Smoothness0, _Smoothness1, _Smoothness2, _Smoothness3) );
     
     // lighting
-
+    
+    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, mixedSmoothness, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );
+    
+    /*
     FRAGMENT_SETUP(s)
     s.diffColor = mixedDiffuse.rgb;
     s.oneMinusReflectivity = 1 - mixedDiffuse.a;
@@ -270,10 +397,11 @@ half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
             binormal = newB * sign (dot (newB, binormal));
         #endif
         half3 normalTangent = mixedNormal;
-        s.normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well
+        s.normalWorld = NormalizePerPixelNormal(tangent * normalTangent.x + binormal * normalTangent.y + normal * normalTangent.z); // @TODO: see if we can squeeze this normalize on SM2.0 as well        
     #else
         s.normalWorld = normalize(i.tangentToWorldAndPackedData[2].xyz);
-    #endif                                              
+    #endif    
+    */                                          
 
     UNITY_SETUP_INSTANCE_ID(i);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
@@ -284,7 +412,7 @@ half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
     //half occlusion = Occlusion(i.tex.xy);
     half occlusion = 1; 
     UnityGI gi = FragmentGI (s, occlusion, i.ambientOrLightmapUV, atten, mainLight);
-
+    
     half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
     //c.rgb += Emission(i.tex.xy);
 

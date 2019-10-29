@@ -90,8 +90,9 @@
             #pragma vertex vertTerrainBlended
             #pragma fragment fragTerrainBlended
             
-            #define UNITY_STANDARD_SIMPLE 0              
-            #include "UnityStandardCoreForward.cginc"            
+            #define UNITY_STANDARD_SIMPLE 0                          
+            #include "UnityStandardCoreForward.cginc"
+            #include "TerrainStandardExt.cginc"            
             
             sampler2D _TerrainHeightmap;
             sampler2D _TerrainNormalmap;
@@ -107,7 +108,6 @@
             sampler2D _TerrainNormal0, _TerrainNormal1, _TerrainNormal2, _TerrainNormal3;
             float _TerrainNormalScale0, _TerrainNormalScale1, _TerrainNormalScale2, _TerrainNormalScale3;            
             float _TerrainMetallic0, _TerrainMetallic1, _TerrainMetallic2, _TerrainMetallic3;
-            float _TerrainSmoothness0, _TerrainSmoothness1, _TerrainSmoothness2, _TerrainSmoothness3;
 
             float2 TerrainUV(float3 worldPos)
             {
@@ -124,27 +124,25 @@
                 return tex2Dlod( _TerrainNormalmap, half4(terrainUV,0,0) ).xyz * 2.0 - 1.0;
             }
             
-            half2 MetallicGlossFromSamples(float4 mainTexSample, float4 metallicGlossMapSample, float metallic)
+            half4 TerrainGIForward(half2 terrainUV, half3 posWorld, half3 normalWorld)
             {
-                half2 mg;
-            
-                #ifdef _METALLICGLOSSMAP
-                    #ifdef _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A
-                        mg.r = metallicGlossMapSample.r;
-                        mg.g = mainTexSample.a;
-                    #else
-                        mg = metallicGlossMapSample.ra;
+                half4 ambientOrLightmapUV = 0;
+                // Static lightmaps
+                #ifdef LIGHTMAP_ON
+                    ambientOrLightmapUV.xy = terrainUV * _TerrainLightmap_ST.xy + _TerrainLightmap_ST.zw;
+                // Sample light probe for Dynamic objects only (no static or dynamic lightmaps)
+                #elif UNITY_SHOULD_SAMPLE_SH
+                    #ifdef VERTEXLIGHT_ON
+                        // Approximated illumination from non-important point lights
+                        ambientOrLightmapUV.rgb = Shade4PointLights (
+                            unity_4LightPosX0, unity_4LightPosY0, unity_4LightPosZ0,
+                            unity_LightColor[0].rgb, unity_LightColor[1].rgb, unity_LightColor[2].rgb, unity_LightColor[3].rgb,
+                            unity_4LightAtten0, posWorld, normalWorld);
                     #endif
-                    mg.g *= _GlossMapScale;
-                #else
-                    mg.r = metallic;
-                    #ifdef _SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A
-                        mg.g = mainTexSample.a * _GlossMapScale;
-                    #else
-                        mg.g = _Glossiness;
-                    #endif
+                    ambientOrLightmapUV.rgb = ShadeSHPerVertex (normalWorld, ambientOrLightmapUV.rgb);
                 #endif
-                return mg;
+
+                return ambientOrLightmapUV;
             }
             
             struct VertexOutputForwardTerrainBlended
@@ -307,15 +305,10 @@
                 mixedMetallic += splatControl.b * _TerrainMetallic2;
                 mixedMetallic += splatControl.a * _TerrainMetallic3;
                 
-                //half mixedSmoothness = splatControl.r * _TerrainSmoothness0;
-                //mixedSmoothness += splatControl.g * _TerrainSmoothness1;
-                //mixedSmoothness += splatControl.b * _TerrainSmoothness2;
-                //mixedSmoothness += splatControl.a * _TerrainSmoothness3;
-                
-                half4 mixedDiffuse = splatControl.r * tex2D( _TerrainSplat0, uvSplat0 ) * half4(1,1,1,_TerrainSmoothness0);
-                mixedDiffuse += splatControl.g * tex2D( _TerrainSplat1, uvSplat1 ) * half4(1,1,1,_TerrainSmoothness1);
-                mixedDiffuse += splatControl.b * tex2D( _TerrainSplat2, uvSplat2 ) * half4(1,1,1,_TerrainSmoothness2);
-                mixedDiffuse += splatControl.a * tex2D( _TerrainSplat3, uvSplat3 ) * half4(1,1,1,_TerrainSmoothness3);                
+                half4 mixedDiffuse = splatControl.r * tex2D( _TerrainSplat0, uvSplat0 );
+                mixedDiffuse += splatControl.g * tex2D( _TerrainSplat1, uvSplat1 );
+                mixedDiffuse += splatControl.b * tex2D( _TerrainSplat2, uvSplat2 );
+                mixedDiffuse += splatControl.a * tex2D( _TerrainSplat3, uvSplat3 );                
                 
                 half3 mixedNormal = UnpackNormalWithScale( tex2D( _TerrainNormal0, uvSplat0 ), _TerrainNormalScale0 ) * splatControl.r;
                 mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal1, uvSplat1 ), _TerrainNormalScale1 ) * splatControl.g;
@@ -358,14 +351,38 @@
                     #endif
                                         
                     i.eyeVec.xyz = normalize(terrainPosWorld - _WorldSpaceCameraPos);
+                    
+                    #if UNITY_PACK_WORLDPOS_WITH_TANGENT
+                        i.tangentToWorldAndPackedData[0].w = terrainPosWorld.x;
+                        i.tangentToWorldAndPackedData[1].w = terrainPosWorld.y;
+                        i.tangentToWorldAndPackedData[2].w = terrainPosWorld.z;
+                    #else
+                        i.posWorld = terrainPosWorld;
+                    #endif
+                    
+                    i.ambientOrLightmapUV = TerrainGIForward( ib.terrainUV, terrainPosWorld, terrainNormalWorld );
                 #endif
                 
-                i.ambientOrLightmapUV.xy = TRANSFORM_TEX( ib.terrainUV, _TerrainLightmap );
-                i.ambientOrLightmapUV.zw = 0;
+                //i.ambientOrLightmapUV.xy = TRANSFORM_TEX( ib.terrainUV, _TerrainLightmap );
+                //i.ambientOrLightmapUV.zw = 0;                      
                 
                 // Standard shading for underlying terrain
                 
-                {                
+                {
+                    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );                                          
+                    UNITY_SETUP_INSTANCE_ID(i);
+                    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
+                    UnityLight mainLight = MainLight ();
+                    UNITY_LIGHT_ATTENUATION(atten, i, s.posWorld);
+                    half occlusion = 1; 
+                    UnityGI gi = FragmentGI (s, occlusion, i.ambientOrLightmapUV, atten, mainLight);    
+                    half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
+                    UNITY_EXTRACT_FOG_FROM_EYE_VEC(i);
+                    UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
+                    return OutputForward (c, s.alpha);                                         
+                }
+                
+                /*{                
                     FRAGMENT_SETUP(s)                    
                     s.oneMinusReflectivity = OneMinusReflectivityFromMetallic( mixedMetallic );                   
                     s.smoothness = mixedDiffuse.a;
@@ -390,7 +407,7 @@
                     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
                     UnityLight mainLight = MainLight ();
                     UNITY_LIGHT_ATTENUATION(atten, i, s.posWorld);
-                    half occlusion = 0;//Occlusion(i.tex.xy);
+                    half occlusion = 1;//Occlusion(i.tex.xy);
                     UnityGI gi = FragmentGI (s, occlusion, i.ambientOrLightmapUV, atten, mainLight);
                     half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
                     //c.rgb += Emission(i.tex.xy);
@@ -398,7 +415,7 @@
                     UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
                     
                     return OutputForward (c, s.alpha);
-                } 
+                }*/
                 
                 // standard shader
                      

@@ -103,9 +103,15 @@
             float4 _TerrainHeightmapDoubleScale;
             float4 _TerrainSize;
             float4 _TerrainPos;        
-            sampler2D _TerrainSplat0, _TerrainSplat1, _TerrainSplat2, _TerrainSplat3;
+            UNITY_DECLARE_TEX2D(_TerrainSplat0);
+            UNITY_DECLARE_TEX2D(_TerrainSplat1);
+            UNITY_DECLARE_TEX2D(_TerrainSplat2);
+            UNITY_DECLARE_TEX2D(_TerrainSplat3);
             float4 _TerrainSplat0_ST, _TerrainSplat1_ST, _TerrainSplat2_ST, _TerrainSplat3_ST;        
-            sampler2D _TerrainNormal0, _TerrainNormal1, _TerrainNormal2, _TerrainNormal3;
+            UNITY_DECLARE_TEX2D_NOSAMPLER(_TerrainNormal0);
+            UNITY_DECLARE_TEX2D_NOSAMPLER(_TerrainNormal1);
+            UNITY_DECLARE_TEX2D_NOSAMPLER(_TerrainNormal2);
+            UNITY_DECLARE_TEX2D_NOSAMPLER(_TerrainNormal3);
             float _TerrainNormalScale0, _TerrainNormalScale1, _TerrainNormalScale2, _TerrainNormalScale3;            
             float _TerrainMetallic0, _TerrainMetallic1, _TerrainMetallic2, _TerrainMetallic3;
 
@@ -305,15 +311,15 @@
                 mixedMetallic += splatControl.b * _TerrainMetallic2;
                 mixedMetallic += splatControl.a * _TerrainMetallic3;
                 
-                half4 mixedDiffuse = splatControl.r * tex2D( _TerrainSplat0, uvSplat0 );
-                mixedDiffuse += splatControl.g * tex2D( _TerrainSplat1, uvSplat1 );
-                mixedDiffuse += splatControl.b * tex2D( _TerrainSplat2, uvSplat2 );
-                mixedDiffuse += splatControl.a * tex2D( _TerrainSplat3, uvSplat3 );                
+                half4 mixedDiffuse = splatControl.r * UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainSplat0, _TerrainSplat0, uvSplat0 );
+                mixedDiffuse += splatControl.g * UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainSplat1, _TerrainSplat1, uvSplat1 );
+                mixedDiffuse += splatControl.b * UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainSplat2, _TerrainSplat2, uvSplat2 );
+                mixedDiffuse += splatControl.a * UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainSplat3, _TerrainSplat3, uvSplat3 );                
                 
-                half3 mixedNormal = UnpackNormalWithScale( tex2D( _TerrainNormal0, uvSplat0 ), _TerrainNormalScale0 ) * splatControl.r;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal1, uvSplat1 ), _TerrainNormalScale1 ) * splatControl.g;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal2, uvSplat2 ), _TerrainNormalScale2 ) * splatControl.b;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal3, uvSplat3 ), _TerrainNormalScale3 ) * splatControl.a;
+                half3 mixedNormal = UnpackNormalWithScale( UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainNormal0, _TerrainSplat0, uvSplat0 ), _TerrainNormalScale0 ) * splatControl.r;
+                mixedNormal += UnpackNormalWithScale( UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainNormal1, _TerrainSplat1, uvSplat1 ), _TerrainNormalScale1 ) * splatControl.g;
+                mixedNormal += UnpackNormalWithScale( UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainNormal2, _TerrainSplat2, uvSplat2 ), _TerrainNormalScale2 ) * splatControl.b;
+                mixedNormal += UnpackNormalWithScale( UNITY_SAMPLE_TEX2D_SAMPLER( _TerrainNormal3, _TerrainSplat3, uvSplat3 ), _TerrainNormalScale3 ) * splatControl.a;
                 mixedNormal.z += 1e-5f;
                 
                 // VertexOutputForwardBase for underlying terrain
@@ -368,6 +374,7 @@
                 
                 // Standard shading for underlying terrain
                 
+                half4 terrainColor = 0;
                 {
                     FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );                                          
                     UNITY_SETUP_INSTANCE_ID(i);
@@ -379,43 +386,8 @@
                     half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
                     UNITY_EXTRACT_FOG_FROM_EYE_VEC(i);
                     UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
-                    return OutputForward (c, s.alpha);                                         
+                    terrainColor = OutputForward (c, s.alpha);                                         
                 }
-                
-                /*{                
-                    FRAGMENT_SETUP(s)                    
-                    s.oneMinusReflectivity = OneMinusReflectivityFromMetallic( mixedMetallic );                   
-                    s.smoothness = mixedDiffuse.a;
-                    s.diffColor = mixedDiffuse * s.oneMinusReflectivity;
-                    s.specColor = lerp( unity_ColorSpaceDielectricSpec.rgb, mixedDiffuse, mixedMetallic );
-                    #if UNITY_REQUIRE_FRAG_WORLDPOS
-                        s.posWorld = terrainPosWorld;
-                    #endif                                        
-                    #if UNITY_REQUIRE_FRAG_WORLDPOS
-                        #ifdef _TANGENT_TO_WORLD
-                            s.normalWorld = float3(
-                                dot(i.tangentToWorldAndPackedData[0].xyz,mixedNormal),
-                                dot(i.tangentToWorldAndPackedData[1].xyz,mixedNormal),
-                                dot(i.tangentToWorldAndPackedData[2].xyz,mixedNormal)
-                            );
-                        #else
-                            s.normalWorld = terrainNormalWorld;
-                        #endif
-                        s.normalWorld = normalize(s.normalWorld);
-                    #endif                                                       
-                    UNITY_SETUP_INSTANCE_ID(i);
-                    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
-                    UnityLight mainLight = MainLight ();
-                    UNITY_LIGHT_ATTENUATION(atten, i, s.posWorld);
-                    half occlusion = 1;//Occlusion(i.tex.xy);
-                    UnityGI gi = FragmentGI (s, occlusion, i.ambientOrLightmapUV, atten, mainLight);
-                    half4 c = UNITY_BRDF_PBS (s.diffColor, s.specColor, s.oneMinusReflectivity, s.smoothness, s.normalWorld, -s.eyeVec, gi.light, gi.indirect);
-                    //c.rgb += Emission(i.tex.xy);
-                    UNITY_EXTRACT_FOG_FROM_EYE_VEC(i);
-                    UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
-                    
-                    return OutputForward (c, s.alpha);
-                }*/
                 
                 // standard shader
                      
@@ -439,7 +411,13 @@
 
                 UNITY_EXTRACT_FOG_FROM_EYE_VEC(i);
                 UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
-                return OutputForward (c, s.alpha); 
+                half4 color = OutputForward (c, s.alpha);
+                
+                #if UNITY_REQUIRE_FRAG_WORLDPOS
+                    return lerp( terrainColor, color, smoothstep( 0, 0.05, deltaHeight ) );
+                #else
+                    return color;
+                #endif
             }
             ENDCG
         }
@@ -501,130 +479,3 @@
     FallBack "VertexLit"
     CustomEditor "StandardShaderGUI"
 }
-
-/*
-            struct appdata
-            {
-                float4 vertex : POSITION;
-                float3 normal : NORMAL;
-                float4 tangent : TANGENT;
-                float2 uv : TEXCOORD0;
-                float2 uv1 : TEXCOORD0;
-            };
-
-            struct v2f
-            {
-                float4 pos : SV_POSITION;
-                float2 uv : TEXCOORD0;
-                float2 lightmapUV : TEXCOORD1;
-                float3 worldPos : TEXCOORD2;
-                float3 worldNormal : TEXCOORD3;
-                SHADOW_COORDS(4)
-                UNITY_FOG_COORDS_PACKED(5,half4)
-            };
-            
-            v2f vert (appdata v)
-            {
-                v2f o;
-                o.pos = UnityObjectToClipPos(v.vertex);
-                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-                #ifdef LIGHTMAP_ON
-                    o.lightmapUV = v.uv1 * unity_LightmapST.xy + unity_LightmapST.zw;
-                #endif 
-                o.worldPos = mul( unity_ObjectToWorld, v.vertex).xyz;
-                o.worldNormal = mul( unity_ObjectToWorld, float4(v.normal,0)).xyz;
-                TRANSFER_SHADOW(o);
-                UNITY_TRANSFER_FOG(o,o.vertex);
-                o.fogCoord.yzw = float3(0,-1,0); // TODO
-                return o;
-            }
-
-            half4 frag (v2f i) : SV_Target
-            {
-                float2 splatUV = TerrainUVs( i.worldPos );
-                float2 terrainLightmapUV = TRANSFORM_TEX( splatUV, _TerrainLightmap );
-                half4 splatControl = tex2D( _TerrainControl, splatUV );
-                half weight = dot( splatControl, half4(1,1,1,1) );
-                splatControl /= (weight + 1e-3f);
-                
-                float2 uvSplat0 = TRANSFORM_TEX( splatUV, _TerrainSplat0 );
-                float2 uvSplat1 = TRANSFORM_TEX( splatUV, _TerrainSplat1 );
-                float2 uvSplat2 = TRANSFORM_TEX( splatUV, _TerrainSplat2 );
-                float2 uvSplat3 = TRANSFORM_TEX( splatUV, _TerrainSplat3 );
-                
-                half4 mixedDiffuse = splatControl.r * tex2D( _TerrainSplat0, uvSplat0 );
-                mixedDiffuse += splatControl.g * tex2D( _TerrainSplat1, uvSplat1 );
-                mixedDiffuse += splatControl.b * tex2D( _TerrainSplat2, uvSplat2 );
-                mixedDiffuse += splatControl.a * tex2D( _TerrainSplat3, uvSplat3 );
-                
-                half3 mixedNormal = UnpackNormalWithScale( tex2D( _TerrainNormal0, uvSplat0 ), _TerrainNormalScale0 ) * splatControl.r;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal1, uvSplat1 ), _TerrainNormalScale1 ) * splatControl.g;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal2, uvSplat2 ), _TerrainNormalScale2 ) * splatControl.b;
-                mixedNormal += UnpackNormalWithScale( tex2D( _TerrainNormal3, uvSplat3 ), _TerrainNormalScale3 ) * splatControl.a;
-                mixedNormal.z += 1e-5f;
-                
-                VertexOutputBaseSimple vo;
-                vo.pos = i.pos;
-                vo.tex = float4(i.uv, 0, 0);
-                vo.eyeVec = half4( normalize( i.worldPos - _WorldSpaceCameraPos ), 0 );
-                #ifdef LIGHTMAP_ON 
-                    vo.ambientOrLightmapUV = i.lightmapUV;
-                #else
-                    vo.ambientOrLightmapUV = 0;
-                #endif 
-                #ifdef SHADOWS_SCREEN
-                    vo._ShadowCoord = i._ShadowCoord;
-                #endif
-                vo.fogCoord = i.fogCoord;
-                vo.normalWorld = half4(i.worldNormal,0);
-                #ifdef _NORMALMAP
-                    vo.tangentSpaceLightDir = float3(0,-1,0); // TODO
-                    #if SPECULAR_HIGHLIGHTS
-                        vo.tangentSpaceEyeVec = float3(0,-1,0); // TODO
-                    #endif
-                #endif
-                #if UNITY_REQUIRE_FRAG_WORLDPOS
-                    vo.posWorld = i.worldPos;
-                #endif
-                
-                
-                FragmentCommonData fcd = UNITY_SETUP_BRDF_INPUT (float4(i.uv,0,0));// = FragmentSetupSimple(i);
-                fcd.diffColor = mixedDiffuse.rgb;
-                fcd.normalWorld = mixedNormal.xyz; // TODO: vertex normal
-                fcd.eyeVec = vo.eyeVec.xyz;
-                fcd.posWorld = i.worldPos;
-                fcd.reflUVW = i.fogCoord.yzw;
-                #ifdef _NORMALMAP
-                    fcd.tangentSpaceNormal =  mixedNormal;
-                #else
-                    fcd.tangentSpaceNormal =  0;
-                #endif
-                
-                UnityLight mainLight = MainLightSimple(vo, fcd);
-                
-                float3 viewDir = half4( normalize( i.worldPos - _WorldSpaceCameraPos ), 0 );
-                
-                                          
-                SurfaceOutputStandard s;
-                s.Albedo = mixedDiffuse.rgb;
-                s.Normal = mixedNormal.xyz;
-                s.Emission = half3( 0, 0, 0 ); // TODO
-                s.Metallic = 0; // TODO
-                s.Smoothness = 0; // TODO
-                s.Occlusion = 0; // TODO
-                s.Alpha = 1.0; // TODO
-                
-                float occlusion = s.Occlusion;
-                float atten = 0;
-                       
-                UnityGI gi;
-                gi = FragmentGI( fcd, occlusion, vo.ambientOrLightmapUV, atten, mainLight, true);
-                                     
-                half4 lighting = LightingStandard( s, viewDir, gi );
-                return lighting;
-            
-                fixed4 col = tex2D( _MainTex, i.uv );
-                UNITY_APPLY_FOG( i.fogCoord, col );
-                return col;
-            }
-            */

@@ -36,7 +36,10 @@
         _DetailNormalMap("Normal Map", 2D) = "bump" {}
 
         [Enum(UV0,0,UV1,1)] _UVSec ("UV Set for secondary textures", Float) = 0
-
+        
+        // Terrain blending
+        _TerrainBlendingStart("TerrainBlendingStart", Range(0.0, 1.0)) = 0.0
+        _TerrainBlendingEnd("TerrainBlendingEnd", Range(0.0, 1.0)) = 1.0
 
         // Blending state
         [HideInInspector] _Mode ("__mode", Float) = 0.0
@@ -66,7 +69,7 @@
             ZWrite [_ZWrite]
 
             CGPROGRAM
-            #pragma target 3.5
+            #pragma target 4.6  
             #pragma exclude_renderers gles 
 
             // -------------------------------------
@@ -94,7 +97,7 @@
             #include "UnityStandardCoreForward.cginc"
             #include "TerrainStandardExt.cginc"            
             
-            sampler2D _TerrainHeightmap;
+            sampler2D _TerrainHeightmap; 
             sampler2D _TerrainNormalmap;
             sampler2D _TerrainControl;
             float4 _TerrainControl_ST;
@@ -114,6 +117,8 @@
             UNITY_DECLARE_TEX2D_NOSAMPLER(_TerrainNormal3);
             float _TerrainNormalScale0, _TerrainNormalScale1, _TerrainNormalScale2, _TerrainNormalScale3;            
             float _TerrainMetallic0, _TerrainMetallic1, _TerrainMetallic2, _TerrainMetallic3;
+            float _TerrainBlendingStart;
+            float _TerrainBlendingEnd;
 
             float2 TerrainUV(float3 worldPos)
             {
@@ -388,7 +393,7 @@
                     UNITY_APPLY_FOG(_unity_fogCoord, c.rgb);
                     terrainColor = OutputForward (c, s.alpha);                                         
                 }
-                
+                                
                 // standard shader
                      
                 WrapVertexOutput( ib, i );
@@ -414,7 +419,7 @@
                 half4 color = OutputForward (c, s.alpha);
                 
                 #if UNITY_REQUIRE_FRAG_WORLDPOS
-                    return lerp( terrainColor, color, smoothstep( 0, 0.05, deltaHeight ) );
+                    return lerp( terrainColor, color, smoothstep( _TerrainBlendingStart, _TerrainBlendingEnd, deltaHeight ) );
                 #else
                     return color;
                 #endif
@@ -477,5 +482,5 @@
     }
     
     FallBack "VertexLit"
-    CustomEditor "StandardShaderGUI"
+    CustomEditor "TerrainBlendedStandardShaderGUI"
 }

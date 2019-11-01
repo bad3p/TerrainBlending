@@ -200,7 +200,11 @@ inline FragmentCommonData TerrainFragmentSetup(half4 mixedDiffuse, half3 mixedNo
     half alpha = 1.0;
 
     FragmentCommonData o = TerrainRoughnessSetup( mixedDiffuse, mixedMetallic );
-    o.normalWorld = TerrainPerPixelWorldNormal( mixedNormal, tangentToWorld );
+    #if defined(UNITY_INSTANCING_ENABLED) && defined(TERRAIN_INSTANCED_PERPIXEL_NORMAL)
+        o.normalWorld = mixedNormal;
+    #else
+        o.normalWorld = TerrainPerPixelWorldNormal( mixedNormal, tangentToWorld );    
+    #endif
     o.eyeVec = normalize( i_eyeVec );
     o.posWorld = i_posWorld;
     
@@ -256,7 +260,7 @@ inline void TerrainSplatting(float4 itex, out half4 mixedDiffuse, out half3 mixe
         #else
             mixedNormal = geomNormal;
         #endif
-        mixedNormal = mixedNormal.xzy;        
+        //mixedNormal = mixedNormal.xzy;        
     #endif
     
     mixedMetallic = dot( splat_control, half4(_Metallic0, _Metallic1, _Metallic2, _Metallic3) );    
@@ -345,18 +349,19 @@ VertexOutputForwardBase vertTerrainBase (VertexInput v)
 }
 
 half4 fragTerrainBase (VertexOutputForwardBase i) : SV_Target
-{
+{    
     UNITY_APPLY_DITHER_CROSSFADE(i.pos.xy);
     
     half4 mixedDiffuse;
     half3 mixedNormal;    
     half mixedMetallic;
-    TerrainSplatting( i.tex, mixedDiffuse, mixedNormal, mixedMetallic ); 
+    TerrainSplatting( i.tex, mixedDiffuse, mixedNormal, mixedMetallic );     
     
     // lighting
     
-    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );                                         
-
+    FragmentCommonData s = TerrainFragmentSetup( mixedDiffuse, mixedNormal, mixedMetallic, i.eyeVec, IN_VIEWDIR4PARALLAX(i), i.tangentToWorldAndPackedData, IN_WORLDPOS(i) );                                             
+    //return float4(s.normalWorld,1);
+    
     UNITY_SETUP_INSTANCE_ID(i);
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
 

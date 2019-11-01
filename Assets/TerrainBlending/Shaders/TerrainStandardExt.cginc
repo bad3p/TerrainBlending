@@ -269,6 +269,31 @@ inline void TerrainSplatting(float4 itex, out half4 mixedDiffuse, out half3 mixe
 VertexOutputForwardBase vertTerrainBase (VertexInput v)
 {
     UNITY_SETUP_INSTANCE_ID(v);
+    #ifdef UNITY_INSTANCING_ENABLED
+        float2 patchVertex = v.vertex.xy;
+        float4 instanceData = UNITY_ACCESS_INSTANCED_PROP(Terrain, _TerrainPatchInstanceData);
+    
+        float4 uvscale = instanceData.z * _TerrainHeightmapRecipSize;
+        float4 uvoffset = instanceData.xyxy * uvscale;
+        uvoffset.xy += 0.5 * _TerrainHeightmapRecipSize.xy;
+        float2 sampleCoords = (patchVertex.xy * uvscale.xy + uvoffset.xy);
+        
+        float hm = UnpackHeightmap( tex2Dlod(_TerrainHeightmapTexture, float4(sampleCoords,0,0) ) );
+        v.vertex.xz = (patchVertex.xy + instanceData.xy) * _TerrainHeightmapScale.xz * instanceData.z;
+        v.vertex.y = hm * _TerrainHeightmapScale.y;
+        v.vertex.w = 1;
+        
+        v.uv0.xy = (patchVertex.xy * uvscale.zw + uvoffset.zw);
+        v.uv1 = v.uv0;
+        
+        #ifdef TERRAIN_INSTANCED_PERPIXEL_NORMAL
+            v.normal = float3(0,1,0);
+        #else
+            float3 normal = tex2Dlod( _TerrainNormalmapTexture, float4(sampleCoords,0,0) ).xyz;
+            v.normal = 2 * normal - 1;
+        #endif
+    #endif    
+    
     VertexOutputForwardBase o;
     UNITY_INITIALIZE_OUTPUT(VertexOutputForwardBase, o);
     UNITY_TRANSFER_INSTANCE_ID(v, o);

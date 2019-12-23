@@ -5,3 +5,4 @@ TerrainBlending.sln
 .idea/.idea.TerrainBlending
 Logs
 Assembly-CSharp-Editor.csproj
+*.cache
